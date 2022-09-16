@@ -1,2 +1,6 @@
 python-pptx
+pytz
+requests
+selenium
 splinter
+urllib3

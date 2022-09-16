@@ -1,48 +1,71 @@
 #!/usr/bin/env python
 
 import datetime
-import time
-from splinter import Browser
-import sys
-
+import json
+import pytz
+import re
+import requests
 from pptx import Presentation
-from pptx.util import Inches, Pt
+
+
+def json_print(obj):
+    text = json.dumps(obj, sort_keys=True, indent=4)
+    print(text)
+
 
 prs = Presentation('whats_new.pptx')
 section_slide_layout = prs.slide_layouts[4]
 content_slide_layout = prs.slide_layouts[8]
 
-begindate = datetime.datetime(2021, 6, 29)
-enddate = datetime.datetime.now() + datetime.timedelta(days=1)
-
-print(begindate, enddate)
-
-browser = Browser('chrome')
-browser.visit('https://aws.amazon.com/about-aws/whats-new/2021/')
+begin_date = datetime.datetime(2022, 3, 30, 0, 0, 0, 0, pytz.UTC)
+end_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
 
 # important, good to know, less interesting
 categories = {'i': [], 'g': [], 'l': []}
 
-mylist = browser.find_by_css('.directory-item')
-for item in mylist:
-    datetext = item.find_by_css('.date')[0].text
-    entrydate = datetime.datetime.strptime(datetext, "Posted On: %b %d, %Y")
-    print(entrydate)
-    if entrydate < begindate:
+params = {
+    'item.directoryId': 'whats-new',
+    'sort_by': 'item.additionalFields.postDateTime',
+    'sort_order': 'desc',
+    'size': '400',
+    'item.locale': 'en_US',
+    'tags.id': 'whats-new#year#2022',
+    'page': '0'
+}
+
+response = requests.get('https://aws.amazon.com/api/dirs/items/search/', params)
+json_response = response.json()
+
+metadata = json_response['metadata']
+items = json_response['items']
+
+print(metadata)
+
+item_count = 1
+for item in items:
+    item_data = item['item']
+    print(item_data)
+    date_text = item_data['dateUpdated']
+    entry_date = datetime.datetime.strptime(date_text, "%Y-%m-%dT%H:%M:%S%z")
+
+    if entry_date < begin_date:
         break
-    if entrydate > enddate:
+    if entry_date > end_date:
         continue
-    title = item.find_by_tag('h3')[0].text
+
+    item_title = item_data['additionalFields']['headline']
+
     while True:
         try:
-            cat = input(title + "\n(i)mportant,(g)ood to know,(l)ess interesting?: ").rstrip()
+            cat = input(str(item_count) + ': ' + item_title + '\n(i)mportant,(g)ood to know,(l)ess interesting?: ').strip()
+            item_count += 1
             if cat not in categories:
                 raise Exception("Not valid category")
             break
         except:
             pass
 
-    categories[cat].append(item)
+    categories[cat].append(item_data)
 
 for cat in ['i', 'g', 'l']:
     slide = prs.slides.add_slide(section_slide_layout)
@@ -57,11 +80,18 @@ for cat in ['i', 'g', 'l']:
     title_shape.text = text
 
     for item in categories[cat]:
-        datetext = item.find_by_css('.date')[0].text
-        entrydate = datetime.datetime.strptime(datetext, "Posted On: %b %d, %Y")
-        timestring = entrydate.strftime("%d %b")
-        title = item.find_by_tag('h3')[0].text
-        description = timestring + "\n\n" + item.find_by_css('.description')[0].text
+        date_text = item['dateUpdated']
+        entry_date = datetime.datetime.strptime(date_text, "%Y-%m-%dT%H:%M:%S%z")
+
+        time_string = entry_date.strftime("%d %b")
+
+        title = item['additionalFields']['headline']
+        description = time_string + "\n\n" + item['additionalFields']['postSummary']
+
+        TAG_RE = re.compile(r'<[^>]+>')
+
+        description = TAG_RE.sub('', description.strip())
+
         slide = prs.slides.add_slide(content_slide_layout)
         shapes = slide.shapes
         title_shape = shapes.title
@@ -72,8 +102,8 @@ for cat in ['i', 'g', 'l']:
         r = p.add_run()
         r.text = title
         hlink = r.hyperlink
-        hlink.address = item.find_by_tag('a')[0]["href"]
+        hlink.address = item['additionalFields']['headlineUrl']
         tf = body_shape.text_frame
         tf.text = description
-browser.quit()
+
 prs.save("output.pptx")
